@@ -1,4 +1,3 @@
-import pprint
 import asyncio
 import json
 import os
@@ -9,7 +8,7 @@ import sys
 VERBOSE = False
 
 # Maxinum time to wait for the container to start
-MAX_WAIT_TIME = int(os.getenv("PORT_FORWARDER_MAX_WAIT_TIME", 60))
+MAX_WAIT_TIME = int(os.getenv("PORT_FORWARDER_MAX_WAIT_TIME", 300))
 
 # Flag to indicate if the server should stop running
 STOP_RUNNING = False
@@ -20,18 +19,26 @@ def verbose_print(message, display=False):
         print(f"[*] forwarder -- {message}")
 
 
-async def is_container_running(container_id):
-    cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
+async def _expect_container(container_id, field, value):
+    cmd = ["docker", "inspect", "-f", "{{" + field + "}}", container_id]
     process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE)
     stdout, _ = await process.communicate()
-    return stdout.decode().strip() == "true"
+    return stdout.decode().strip() == value
 
 
 async def monitor_container(container_id):
     global STOP_RUNNING
     while True:
-        container_running = await is_container_running(container_id)
-        if not container_running:
+        container_running = await _expect_container(
+            container_id, ".State.Running", "true"
+        )
+        container_restarting = await _expect_container(
+            container_id, ".State.Restarting", "true"
+        )
+        container_creating = await _expect_container(
+            container_id, ".State.Status", "created"
+        )
+        if not (container_creating or container_restarting) and not container_running:
             STOP_RUNNING = True
             break
         await asyncio.sleep(1)  # Check every second
@@ -48,18 +55,7 @@ async def forward_data(source, target):
 
 async def handle_client(reader, writer, args):
     # Setting up the subprocess to run the command
-    (container_id, container_ip, remote_user, port) = args
-
-    start_time = time.time()
-    while not await is_container_running(container_id):
-        await asyncio.sleep(1)  # Wait and check again in 1 second
-        if time.time() - start_time > MAX_WAIT_TIME:
-            verbose_print(
-                f"Timeout: Container {container_id} did not start within {MAX_WAIT_TIME} seconds."
-            )
-            writer.close()
-            await writer.wait_closed()
-            return
+    (container_id, remote_user, port) = args
 
     # Now the container is running, proceed with docker exec
     try:
@@ -122,12 +118,10 @@ async def handle_client(reader, writer, args):
     verbose_print(f"Termiate process in {container_id} '{command[-1]}'")
 
 
-async def start_server(container_id: str, container_ip: str, remote_user: str, port):
+async def start_server(container_id: str, remote_user: str, port):
     host = "0.0.0.0"
     server = await asyncio.start_server(
-        lambda r, w: handle_client(
-            r, w, (container_id, container_ip, remote_user, port)
-        ),
+        lambda r, w: handle_client(r, w, (container_id, remote_user, port)),
         host,
         port,
     )
@@ -143,12 +137,9 @@ async def start_server(container_id: str, container_ip: str, remote_user: str, p
         verbose_print(f"Stop listening {host}:{port}, exited graceflly", display=True)
 
 
-async def start_all(
-    container_id: str, container_ip: str, remote_user: str, forward_ports: list[int]
-):
+async def start_all(container_id, remote_user, forward_ports):
     server_tasks = [
-        start_server(container_id, container_ip, remote_user, port)
-        for port in forward_ports
+        start_server(container_id, remote_user, port) for port in forward_ports
     ]
     # Start container monitoring task
     monitor_task = asyncio.create_task(monitor_container(container_id))
@@ -156,19 +147,93 @@ async def start_all(
     await asyncio.gather(*server_tasks, monitor_task)
 
 
-def _docker_command(command: list[str]) -> str:
+def get_container_id(workspace):
+    verbose_print("Wait to get container id")
+    command = [
+        "docker",
+        "ps",
+        "-q",
+        "--filter",
+        f"label=devcontainer.local_folder={workspace}",
+        "--filter",
+        f"label=devcontainer.config_file={workspace}/.devcontainer/devcontainer.json",
+        "--filter",
+        "status=running",
+    ]
     result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        verbose_print(f"Error: {command}", result.stderr)
-        exit(1)
-    return result.stdout.strip()
+
+    start_time = time.time()
+    if not result.stdout.strip():
+        verbose_print(" ".join(command))
+
+        while result.returncode != 0 or not result.stdout.strip():
+            time.sleep(1)  # Wait and check again in 1 second
+            if time.time() - start_time > MAX_WAIT_TIME:
+                verbose_print(
+                    f"Exited: Container did not start within {MAX_WAIT_TIME} seconds."
+                )
+                exit(1)
+            else:
+                result = subprocess.run(command, capture_output=True, text=True)
+
+        return result.stdout.strip()
+    else:
+        verbose_print(
+            f"previous devcontainer {result.stdout.strip()} is running, wait for its removal."
+        )
+        while result.returncode == 0 and result.stdout.strip():
+            time.sleep(1)
+            if time.time() - start_time > MAX_WAIT_TIME:
+                verbose_print(
+                    f"Exited: Container did not restart within {MAX_WAIT_TIME} seconds."
+                )
+                exit(1)
+            else:
+                result = subprocess.run(command, capture_output=True, text=True)
+        # wait for new devcontainer become running
+        while result.returncode != 0 or not result.stdout.strip():
+            time.sleep(1)
+            if time.time() - start_time > MAX_WAIT_TIME:
+                verbose_print(
+                    f"Exited: Container did not restart within {MAX_WAIT_TIME} seconds."
+                )
+                exit(1)
+            else:
+                result = subprocess.run(command, capture_output=True, text=True)
+        return result.stdout.strip()
+
+
+def wait_for_contaier_running(container_id):
+    start_time = time.time()
+    command = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    verbose_print("Wait for container to be running")
+    while result.returncode != 0 or result.stdout.strip() != "true":
+        time.sleep(1)
+        if time.time() - start_time > MAX_WAIT_TIME:
+            verbose_print(
+                f"Exited: Container {container_id} .State.Running did not become true within {MAX_WAIT_TIME} seconds."
+            )
+            exit(1)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True)
+
+
+def _docker_command(command, container_running=True):
+    if container_running:
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            verbose_print(f"Error: {command} {result.stderr}", display=True)
+            exit(1)
+        return result.stdout.strip()
 
 
 def get_remote_user(devcontainer_json, container_id):
     # determine the user to run the command
     remoteUser = "root"
     if devcontainer_json.get("remoteUser"):
-        remoteUesr = devcontainer_json.get("remoteUser")
+        remoteUser = devcontainer_json.get("remoteUser")
     else:
         metadata: list[dict] = json.loads(
             _docker_command(
@@ -178,7 +243,7 @@ def get_remote_user(devcontainer_json, container_id):
                     "-f",
                     '{{ index .Config.Labels "devcontainer.metadata" }}',
                     container_id,
-                ]
+                ],
             )
         )
 
@@ -204,33 +269,13 @@ def main():
 
     forward_ports = devcontainer_json.get("forwardPorts", [])
     if forward_ports:
-        # first port
         workspace = os.path.realpath(os.getcwd())
-        container_id = _docker_command(
-            [
-                "docker",
-                "ps",
-                "-q",
-                "-a",
-                "--filter",
-                f"label=devcontainer.local_folder={workspace}",
-                "--filter",
-                f"label=devcontainer.config_file={workspace}/.devcontainer/devcontainer.json",
-            ]
-        )
-        container_ip = _docker_command(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                "{{ .NetworkSettings.IPAddress }}",
-                container_id,
-            ]
-        )
+        container_id = get_container_id(workspace)
+        # wait_for_contaier_running(container_id)
         # determine the user to run the socat command
         remote_user = get_remote_user(devcontainer_json, container_id)
 
-        asyncio.run(start_all(container_id, container_ip, remote_user, forward_ports))
+        asyncio.run(start_all(container_id, remote_user, forward_ports))
 
 
 if __name__ == "__main__":
