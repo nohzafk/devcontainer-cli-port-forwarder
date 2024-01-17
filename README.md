@@ -10,11 +10,33 @@ This Python script is created because currently DevContainer CLI does not suppor
 - If you are using vSCode with the Visual Studio Code Dev Containers extension,The VS Code extension already includes built-in support for port forwarding you do not need to use this script.
 
 ## Prerequisites
-Python 3 interpreter installed on the host machine.
+- host machine: Python 3 interpreter is installed.
+- container: `socat` is installed.
+
+
 
 ## Features
 - Dynamic Port Forwarding: Automates the process of forwarding specified ports from the host to a Docker container.
 - Automatic Shutdown: The script automatically exits when the associated Docker container stops running.
+
+# Installation
+
+This script won't automatically install `socat` for you, you need to install `socat` inside the container.
+
+you can simply add a line in **onCreateCommand** in your `devcontainer.json`
+
+```json
+"onCreateCommand": "sudo apt update && sudo apt install -y socat",
+```
+
+or use nix feature
+```json
+"features": {
+    "ghcr.io/devcontainers/features/nix:1": {
+        "packages": "socat"
+    }
+},
+```
 
 # Usage
 git clone this project under your project's `.devcontainer` directory, or anywhere you like.
