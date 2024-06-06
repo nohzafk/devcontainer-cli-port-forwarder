@@ -41,6 +41,10 @@ or use nix feature
 # Usage
 git clone this project under your project's `.devcontainer` directory, or anywhere you like.
 
+```shell
+git clone https://github.com/nohzafk/devcontainer-cli-port-forwarder.git .devcontainer/devcontainer-cli-port-forwarder
+```
+
 In your **devcontainer.json**, set the `initializeCommand` to run the script in the background when the container is being initialized:
 
 ```json
