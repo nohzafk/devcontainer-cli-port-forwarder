@@ -20,8 +20,13 @@ This Python script is created because currently DevContainer CLI does not suppor
 - Automatic Shutdown: The script automatically exits when the associated Docker container stops running.
 
 # Installation
+git clone this project under your project's `.devcontainer` directory, or anywhere you like.
 
-This script won't automatically install `socat` for you, you need to install `socat` inside the container.
+```shell
+git clone https://github.com/nohzafk/devcontainer-cli-port-forwarder.git .devcontainer/devcontainer-cli-port-forwarder
+```
+
+This script won't automatically install `socat` inside the container for you, you need to install `socat` inside the container.
 
 you can simply add a line in **onCreateCommand** in your `devcontainer.json`
 
@@ -39,21 +44,24 @@ or use nix feature
 ```
 
 # Usage
-git clone this project under your project's `.devcontainer` directory, or anywhere you like.
-
-```shell
-git clone https://github.com/nohzafk/devcontainer-cli-port-forwarder.git .devcontainer/devcontainer-cli-port-forwarder
-```
-
 In your **devcontainer.json**, set the `initializeCommand` to run the script in the background when the container is being initialized:
 
 ```json
-"initializeCommand": "python3 .devcontainer/devcontainer-cli-port-forwarder/forwarder.py &"
+"initializeCommand": "python3 .devcontainer/devcontainer-cli-port-forwarder/forwarder.py &",
 ```
 
 To enable verbose output, which provides more detailed information about the port forwarding process, modify the initializeCommand as follows:
 ```json
-"initializeCommand": "python3 .devcontainer/devcontainer-cli-port-forwarder/forwarder.py verbose &"
+"initializeCommand": "python3 .devcontainer/devcontainer-cli-port-forwarder/forwarder.py verbose &",
+```
+
+and finally specify the ports that you want to forward from host by **forwardPorts**,
+
+for example port 2222 used by devcontainer feature sshd `"ghcr.io/devcontainers/features/sshd:1": {},`
+
+Use 'forwardPorts' to make a list of ports inside the container available locally.
+```json
+"forwardPorts": [2222],
 ```
 
 Once configured in your devcontainer.json, the script will automatically start when you create a devcontainer using the devcontainer CLI. It listens on specified ports and forwards them to the Docker container.
