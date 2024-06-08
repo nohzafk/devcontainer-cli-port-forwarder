@@ -16,7 +16,8 @@ STOP_RUNNING = False
 
 def verbose_print(message, display=False):
     if VERBOSE or display:
-        print(f"[*] forwarder -- {message}")
+        with open("/tmp/devcontainer-cli-port-forwarder.log", "w+") as f:
+            f.write(f"[*] forwarder -- {message}\n")
 
 
 async def _expect_container(container_id, field, value):
@@ -178,6 +179,8 @@ def get_container_id(workspace):
 
         return result.stdout.strip()
     else:
+        # return result.stdout.strip()
+
         verbose_print(
             f"previous devcontainer {result.stdout.strip()} is running, wait for its removal."
         )
@@ -265,6 +268,7 @@ def main():
         for line in f:
             jsondata += line.split("//")[0]
 
+    verbose_print(jsondata)
     devcontainer_json = json.loads(jsondata)
 
     forward_ports = devcontainer_json.get("forwardPorts", [])
@@ -276,6 +280,8 @@ def main():
         remote_user = get_remote_user(devcontainer_json, container_id)
 
         asyncio.run(start_all(container_id, remote_user, forward_ports))
+    else:
+        verbose_print("No forwardPorts found", display=True)
 
 
 if __name__ == "__main__":
